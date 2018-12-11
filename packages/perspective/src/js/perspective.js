@@ -8,8 +8,8 @@
  */
 
 import * as defaults from "./defaults.js";
-import {DataParser, clean_data} from "./parse_data.js";
-import {DateParser} from "./date_parser.js";
+import {DataAccessor, clean_data} from "./Parser/DataAccessor.js";
+import {DateParser} from "./Parser/DateParser.js";
 import {bindall} from "./utils.js";
 
 import {Precision} from "@apache-arrow/es5-esm/type";
@@ -31,7 +31,7 @@ const CHUNKED_THRESHOLD = 100000;
 
 export default function(Module) {
     let __MODULE__ = Module;
-    let parser = new DataParser();
+    let parser = new DataAccessor();
 
     /******************************************************************************
      *
