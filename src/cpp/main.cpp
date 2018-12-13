@@ -397,24 +397,26 @@ col_to_js_typed_array(T ctx, t_tvidx idx) {
 
 template <typename T>
 void
-_fill_col(val dcol, t_col_sptr col, t_bool is_arrow) {
+_fill_col(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
     // iterates through dcol, sets them on the c++ column
     t_uindex nrows = col->size();
 
     if (is_arrow) {
-        val data = dcol["values"];
+        val data = accessor["values"];
         arrow::vecFromTypedArray(data, col->get_nth<T>(0), nrows);
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            if (dcol[i].isUndefined())
+            val item = accessor.call<val>("get", name, i);
+
+            if (item.isUndefined())
                 continue;
 
-            if (dcol[i].isNull()) {
+            if (item.isNull()) {
                 col->unset(i);
                 continue;
             }
 
-            auto elem = dcol[i].as<T>();
+            auto elem = item.as<T>(); //dcol[i].as<T>();
             col->set_nth(i, elem);
         }
     }
@@ -422,11 +424,11 @@ _fill_col(val dcol, t_col_sptr col, t_bool is_arrow) {
 
 template <>
 void
-_fill_col<t_int64>(val dcol, t_col_sptr col, t_bool is_arrow) {
+_fill_col<t_int64>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
     t_uindex nrows = col->size();
 
     if (is_arrow) {
-        val data = dcol["values"];
+        val data = accessor["values"];
         // arrow packs 64 bit into two 32 bit ints
         arrow::vecFromTypedArray(data, col->get_nth<t_int64>(0), nrows * 2);
     } else {
@@ -437,15 +439,15 @@ _fill_col<t_int64>(val dcol, t_col_sptr col, t_bool is_arrow) {
 
 template <>
 void
-_fill_col<t_time>(val dcol, t_col_sptr col, t_bool is_arrow) {
+_fill_col<t_time>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
     t_uindex nrows = col->size();
 
     if (is_arrow) {
-        val data = dcol["values"];
+        val data = accessor["values"];
         // arrow packs 64 bit into two 32 bit ints
         arrow::vecFromTypedArray(data, col->get_nth<t_time>(0), nrows * 2);
 
-        t_int8 unit = dcol["type"]["unit"].as<t_int8>();
+        t_int8 unit = accessor["type"]["unit"].as<t_int8>();
         if (unit != /* Arrow.enum_.TimeUnit.MILLISECOND */ 1) {
             // Slow path - need to convert each value
             t_int64 factor = 1;
@@ -460,15 +462,17 @@ _fill_col<t_time>(val dcol, t_col_sptr col, t_bool is_arrow) {
         }
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            if (dcol[i].isUndefined())
+            val item = accessor.call<val>("get", name, i);
+
+            if (item.isUndefined())
                 continue;
 
-            if (dcol[i].isNull()) {
+            if (item.isNull()) {
                 col->unset(i);
                 continue;
             }
 
-            auto elem = static_cast<t_int64>(dcol[i].call<val>("getTime").as<t_float64>());
+            auto elem = static_cast<t_int64>(item.call<val>("getTime").as<t_float64>()); //dcol[i].as<T>();
             col->set_nth(i, elem);
         }
     }
@@ -476,7 +480,7 @@ _fill_col<t_time>(val dcol, t_col_sptr col, t_bool is_arrow) {
 
 template <>
 void
-_fill_col<t_date>(val dcol, t_col_sptr col, t_bool is_arrow) {
+_fill_col<t_date>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
     t_uindex nrows = col->size();
 
     if (is_arrow) {
@@ -499,27 +503,29 @@ _fill_col<t_date>(val dcol, t_col_sptr col, t_bool is_arrow) {
         // }
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            if (dcol[i].isUndefined())
+            val item = accessor.call<val>("get", name, i);
+
+            if (item.isUndefined())
                 continue;
 
-            if (dcol[i].isNull()) {
+            if (item.isNull()) {
                 col->unset(i);
                 continue;
             }
-
-            col->set_nth(i, jsdate_to_t_date(dcol[i]));
+            
+            col->set_nth(i, jsdate_to_t_date(item));
         }
     }
 }
 
 template <>
 void
-_fill_col<t_bool>(val dcol, t_col_sptr col, t_bool is_arrow) {
+_fill_col<t_bool>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
     t_uindex nrows = col->size();
 
     if (is_arrow) {
         // arrow packs bools into a bitmap
-        val data = dcol["values"];
+        val data = accessor["values"];
         for (auto i = 0; i < nrows; ++i) {
             t_uint8 elem = data[i / 8].as<t_uint8>();
             t_bool v = elem & (1 << (i % 8));
@@ -527,15 +533,17 @@ _fill_col<t_bool>(val dcol, t_col_sptr col, t_bool is_arrow) {
         }
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            if (dcol[i].isUndefined())
+            val item = accessor.call<val>("get", name, i);
+
+            if (item.isUndefined())
                 continue;
 
-            if (dcol[i].isNull()) {
+            if (item.isNull()) {
                 col->unset(i);
                 continue;
             }
 
-            auto elem = dcol[i].as<t_bool>();
+            auto elem = item.as<t_bool>();
             col->set_nth(i, elem);
         }
     }
@@ -543,34 +551,34 @@ _fill_col<t_bool>(val dcol, t_col_sptr col, t_bool is_arrow) {
 
 template <>
 void
-_fill_col<std::string>(val dcol, t_col_sptr col, t_bool is_arrow) {
+_fill_col<std::string>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
 
     t_uindex nrows = col->size();
 
     if (is_arrow) {
-        if (dcol["constructor"]["name"].as<t_str>() == "DictionaryVector") {
+        if (accessor["constructor"]["name"].as<t_str>() == "DictionaryVector") {
 
-            val dictvec = dcol["dictionary"];
+            val dictvec = accessor["dictionary"];
             arrow::fill_col_dict(dictvec, col);
 
             // Now process index into dictionary
 
             // Perspective stores string indices in a 32bit unsigned array
             // Javascript's typed arrays handle copying from various bitwidth arrays properly
-            val vkeys = dcol["indices"]["values"];
+            val vkeys = accessor["indices"]["values"];
             arrow::vecFromTypedArray(vkeys, col->get_nth<t_uindex>(0), nrows, "Uint32Array");
 
-        } else if (dcol["constructor"]["name"].as<t_str>() == "Utf8Vector"
-            || dcol["constructor"]["name"].as<t_str>() == "BinaryVector") {
+        } else if (accessor["constructor"]["name"].as<t_str>() == "Utf8Vector"
+            || accessor["constructor"]["name"].as<t_str>() == "BinaryVector") {
 
-            val vdata = dcol["values"];
+            val vdata = accessor["values"];
             t_int32 vsize = vdata["length"].as<t_int32>();
             std::vector<t_uint8> data;
             data.reserve(vsize);
             data.resize(vsize);
             arrow::vecFromTypedArray(vdata, data.data(), vsize);
 
-            val voffsets = dcol["valueOffsets"];
+            val voffsets = accessor["valueOffsets"];
             t_int32 osize = voffsets["length"].as<t_int32>();
             std::vector<t_int32> offsets;
             offsets.reserve(osize);
@@ -588,15 +596,17 @@ _fill_col<std::string>(val dcol, t_col_sptr col, t_bool is_arrow) {
         }
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            if (dcol[i].isUndefined())
+            val item = accessor.call<val>("get", name, i);
+
+            if (item.isUndefined())
                 continue;
 
-            if (dcol[i].isNull()) {
+            if (item.isNull()) {
                 col->unset(i);
                 continue;
             }
 
-            std::wstring welem = dcol[i].as<std::wstring>();
+            std::wstring welem = item.as<std::wstring>();
             std::wstring_convert<utf16convert_type, wchar_t> converter;
             std::string elem = converter.to_bytes(welem);
             col->set_nth(i, elem);
@@ -616,51 +626,59 @@ _fill_col<std::string>(val dcol, t_col_sptr col, t_bool is_arrow) {
  *
  */
 void
-_fill_data(t_table& tbl, t_svec ocolnames, val j_data, std::vector<t_dtype> odt,
+_fill_data(t_table& tbl, t_svec ocolnames, val accessor, std::vector<t_dtype> odt,
     t_uint32 offset, t_bool is_arrow) {
-    std::vector<val> data_cols = vecFromJSArray<val>(j_data);
+    std::vector<val> data_cols;
+
+    if (is_arrow) {
+        data_cols = vecFromJSArray<val>(accessor["cdata"]);
+    }
+
     for (auto cidx = 0; cidx < ocolnames.size(); ++cidx) {
         auto name = ocolnames[cidx];
         auto col = tbl.get_column(name);
         auto col_type = odt[cidx];
-        auto dcol = data_cols[cidx];
 
-        switch (col_type) {
-            case DTYPE_INT8: {
-                _fill_col<t_int8>(dcol, col, is_arrow);
-            } break;
-            case DTYPE_INT16: {
-                _fill_col<t_int16>(dcol, col, is_arrow);
-            } break;
-            case DTYPE_INT32: {
-                _fill_col<t_int32>(dcol, col, is_arrow);
-            } break;
-            case DTYPE_INT64: {
-                _fill_col<t_int64>(dcol, col, is_arrow);
-            } break;
-            case DTYPE_BOOL: {
-                _fill_col<t_bool>(dcol, col, is_arrow);
-            } break;
-            case DTYPE_FLOAT32: {
-                _fill_col<t_float32>(dcol, col, is_arrow);
-            } break;
-            case DTYPE_FLOAT64: {
-                _fill_col<t_float64>(dcol, col, is_arrow);
-            } break;
-            case DTYPE_DATE: {
-                _fill_col<t_date>(dcol, col, is_arrow);
-            } break;
-            case DTYPE_TIME: {
-                _fill_col<t_time>(dcol, col, is_arrow);
-            } break;
-            case DTYPE_STR: {
-                _fill_col<std::string>(dcol, col, is_arrow);
-            } break;
-            default:
-                break;
-        }
+        // TODO: please refactor
         if (is_arrow) {
-            // Fill validity bitmap
+            auto dcol = data_cols[cidx];
+            
+            switch (col_type) {
+                case DTYPE_INT8: {
+                    _fill_col<t_int8>(dcol, col, name, is_arrow);
+                } break;
+                case DTYPE_INT16: {
+                    _fill_col<t_int16>(dcol, col, name, is_arrow);
+                } break;
+                case DTYPE_INT32: {
+                    _fill_col<t_int32>(dcol, col, name, is_arrow);
+                } break;
+                case DTYPE_INT64: {
+                    _fill_col<t_int64>(dcol, col, name, is_arrow);
+                } break;
+                case DTYPE_BOOL: {
+                    _fill_col<t_bool>(dcol, col, name, is_arrow);
+                } break;
+                case DTYPE_FLOAT32: {
+                    _fill_col<t_float32>(dcol, col, name, is_arrow);
+                } break;
+                case DTYPE_FLOAT64: {
+                    _fill_col<t_float64>(dcol, col, name, is_arrow);
+                } break;
+                case DTYPE_DATE: {
+                    _fill_col<t_date>(dcol, col, name, is_arrow);
+                } break;
+                case DTYPE_TIME: {
+                    _fill_col<t_time>(dcol, col, name, is_arrow);
+                } break;
+                case DTYPE_STR: {
+                    _fill_col<std::string>(dcol, col, name, is_arrow);
+                } break;
+                default:
+                    break;
+            }
+
+             // Fill validity bitmap
             t_uint32 null_count = dcol["nullCount"].as<t_uint32>();
 
             if (null_count == 0) {
@@ -668,6 +686,41 @@ _fill_data(t_table& tbl, t_svec ocolnames, val j_data, std::vector<t_dtype> odt,
             } else {
                 val validity = dcol["nullBitmap"];
                 arrow::fill_col_valid(validity, col);
+            }
+        } else {
+            switch (col_type) {
+                case DTYPE_INT8: {
+                    _fill_col<t_int8>(accessor, col, name, is_arrow);
+                } break;
+                case DTYPE_INT16: {
+                    _fill_col<t_int16>(accessor, col, name, is_arrow);
+                } break;
+                case DTYPE_INT32: {
+                    _fill_col<t_int32>(accessor, col, name, is_arrow);
+                } break;
+                case DTYPE_INT64: {
+                    _fill_col<t_int64>(accessor, col, name, is_arrow);
+                } break;
+                case DTYPE_BOOL: {
+                    _fill_col<t_bool>(accessor, col, name, is_arrow);
+                } break;
+                case DTYPE_FLOAT32: {
+                    _fill_col<t_float32>(accessor, col, name, is_arrow);
+                } break;
+                case DTYPE_FLOAT64: {
+                    _fill_col<t_float64>(accessor, col, name, is_arrow);
+                } break;
+                case DTYPE_DATE: {
+                    _fill_col<t_date>(accessor, col, name, is_arrow);
+                } break;
+                case DTYPE_TIME: {
+                    _fill_col<t_time>(accessor, col, name, is_arrow);
+                } break;
+                case DTYPE_STR: {
+                    _fill_col<std::string>(accessor, col, name, is_arrow);
+                } break;
+                default:
+                    break;
             }
         }
     }
@@ -861,7 +914,7 @@ table_add_computed_column(t_table& table, val computed_defs) {
 }
 
 /** 
- * DataParser
+ * DataAccessor
  * 
  * parses and converts input data into a canonical format for
  * interfacing with Perspective.
@@ -1092,20 +1145,27 @@ make_gnode(const t_table& table) {
  * a populated table.
  */
 t_gnode_sptr
-make_table(t_pool* pool, val gnode, val chunk, val computed, t_uint32 offset, t_uint32 limit,
-    t_str index, t_bool is_delete) {
-    t_uint32 size;
-    if (!chunk["row_count"].isUndefined()) {
-        size = chunk["row_count"].as<t_uint32>();
-    } else if (!chunk["cdata"][0]["length"].isUndefined()) {
-        size = chunk["cdata"][0]["length"].as<t_uint32>();
-    } else {
-        size = 0;
-    }
+make_table(t_pool* pool, val gnode, val accessor, val computed, t_uint32 offset, t_uint32 limit,
+    t_str index, t_bool is_delete, t_bool is_arrow) {
+    t_uint32 size = accessor["row_count"].as<t_int32>();
+
+    //val data = accessor["data"];
+    //t_int32 format = accessor["format"].as<t_int32>();
+
+    val names = val::undefined();
+    val types = val::undefined();
 
     // Create the input and port schemas
-    t_svec colnames = vecFromJSArray<std::string>(chunk["names"]);
-    t_dtypevec dtypes = vecFromJSArray<t_dtype>(chunk["types"]);
+    if (is_arrow) {
+        names = accessor["names"];
+        types = accessor["types"];
+    } else {
+        names = accessor["column_names"];
+        types = accessor["data_types"];
+    }
+
+    t_svec colnames = vecFromJSArray<std::string>(names);
+    t_dtypevec dtypes = vecFromJSArray<t_dtype>(types);
 
     // Create the table
     // TODO assert size > 0
@@ -1113,7 +1173,7 @@ make_table(t_pool* pool, val gnode, val chunk, val computed, t_uint32 offset, t_
     tbl.init();
     tbl.extend(size);
 
-    _fill_data(tbl, colnames, chunk["cdata"], dtypes, offset, chunk["is_arrow"].as<t_bool>());
+    _fill_data(tbl, colnames, accessor, dtypes, offset, is_arrow);
 
     // Set up pkey and op columns
     if (is_delete) {

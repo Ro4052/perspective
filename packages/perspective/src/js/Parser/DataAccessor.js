@@ -8,6 +8,7 @@
  */
 
 import {DateParser, DATE_PARSE_CANDIDATES} from "./DateParser.js";
+import {get_column_type} from "../utils.js";
 import moment from "moment";
 
 export class DataAccessor {
@@ -22,6 +23,8 @@ export class DataAccessor {
         this.row_count = 0;
         this.column_names = [];
         this.data_types = [];
+        this.moment = moment;
+        this.candidates = DATE_PARSE_CANDIDATES;
     }
 
     extract_typevec(typevec) {
@@ -44,7 +47,17 @@ export class DataAccessor {
         }
     }
 
-    get(__MODULE__, column_name, row_index) {
+    get_row_count(data) {
+        if (this.format === this.data_formats.row) {
+            return data.length;
+        } else if (this.format === this.data_formats.column) {
+            return data[Object.keys(data)[0]].length;
+        } else {
+            return 0;
+        }
+    }
+
+    get(column_name, row_index) {
         let value;
 
         if (this.format === this.data_formats.row) {
@@ -62,12 +75,13 @@ export class DataAccessor {
             throw "Unknown data format!";
         }
 
-        return this.normalize_value(__MODULE__, value, column_name);
+        return this.normalize_value(value, column_name);
     }
 
-    normalize_value(__MODULE__, value, name) {
+    normalize_value(value, name) {
         let val = clean_data(value);
-        let type = this.data_types[this.column_names.indexOf(name)];
+        // TODO: optimize out the call to this.data_types
+        let type = this.data_types[this.column_names.indexOf(name)].value;
         const date_parser = new DateParser();
 
         if (val === null) {
@@ -78,22 +92,22 @@ export class DataAccessor {
             return undefined;
         }
 
-        switch (type.value) {
-            case __MODULE__.t_dtype.DTYPE_FLOAT64.value: {
+        switch (get_column_type(type)) {
+            case "float": {
                 val = Number(val);
                 break;
             }
-            case __MODULE__.t_dtype.DTYPE_INT32.value: {
+            case "integer": {
                 val = Number(val);
                 if (val > 2147483647 || val < -2147483648) {
                     // This handles cases where a long sequence of e.g. 0 precedes a clearly
                     // float value in an inferred column.  Would not be needed if the type inference
                     // checked the entire column, or we could reset parsing.
-                    this.data_types[this.column_names.indexOf(name)] = __MODULE__.t_dtype.DTYPE_FLOAT64;
+                    //this.data_types[this.column_names.indexOf(name)] = __MODULE__.t_dtype.DTYPE_FLOAT64;
                 }
                 break;
             }
-            case __MODULE__.t_dtype.DTYPE_BOOL.value: {
+            case "boolean": {
                 if (typeof val === "string") {
                     val.toLowerCase() === "true" ? (val = true) : (val = false);
                 } else {
@@ -101,8 +115,8 @@ export class DataAccessor {
                 }
                 break;
             }
-            case __MODULE__.t_dtype.DTYPE_TIME.value:
-            case __MODULE__.t_dtype.DTYPE_DATE.value: {
+            case "datetime":
+            case "date": {
                 val = date_parser.parse(val);
                 break;
             }
@@ -126,7 +140,7 @@ export class DataAccessor {
             for (let name of this.column_names) {
                 let col = [];
                 for (let d of data) {
-                    col.push(this.normalize_value(__MODULE__, d[name], name));
+                    col.push(this.normalize_value(d[name], name));
                 }
 
                 cdata.push(col);
@@ -154,6 +168,14 @@ export class DataAccessor {
         return [cdata, row_count];
     }
 
+    init(__MODULE__, data) {
+        this.data = data;
+        this.format = this.is_format(data);
+        this.row_count = this.get_row_count(data);
+        // TODO: optimize and remove double calculations
+        this.column_names = __MODULE__.column_names(data, this.format);
+        this.data_types = __MODULE__.data_types(data, this.format, this.column_names, moment, DATE_PARSE_CANDIDATES);
+    }
     /**
      * Converts supported inputs into canonical data for
      * interfacing with perspective.
