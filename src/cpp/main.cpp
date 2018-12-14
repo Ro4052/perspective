@@ -395,6 +395,58 @@ col_to_js_typed_array(T ctx, t_tvidx idx) {
     return arr;
 }
 
+// Type inferrence for fill_col and data_types
+t_bool
+is_valid_date(val moment, val candidates, val x) {
+    return moment
+        .call<val>("call", val::object(), x, candidates, val(true))
+        .call<val>("isValid")
+        .as<t_bool>();
+}
+
+t_dtype
+infer_type(val x, val moment, val candidates) {
+    t_str jstype = x.typeOf().as<t_str>();
+    t_dtype t = t_dtype::DTYPE_FLOAT64;
+
+    if (x.isNull()) {
+        t = t_dtype::DTYPE_NONE;
+    } else if (jstype == "number") {
+        t_float64 x_float64 = x.as<t_float64>();
+        if ((std::fmod(x_float64, 1.0) == 0.0) && (x_float64 < 10000.0) && (x_float64 != 0.0)) {
+            t = t_dtype::DTYPE_INT32;
+        } else {
+            t = t_dtype::DTYPE_FLOAT64;
+        }
+    } else if (jstype == "boolean") {
+        t = t_dtype::DTYPE_BOOL;
+    } else if (x.instanceof(val::global("Date"))) {
+        t_int32 hours = x.call<val>("getHours").as<t_int32>();
+        t_int32 minutes = x.call<val>("getMinutes").as<t_int32>();
+        t_int32 seconds = x.call<val>("getSeconds").as<t_int32>();
+        t_int32 milliseconds = x.call<val>("getMilliseconds").as<t_int32>();
+
+        if (hours == 0 && minutes == 0 && seconds == 0 && milliseconds == 0) {
+            t = t_dtype::DTYPE_DATE;
+        } else {
+            t = t_dtype::DTYPE_TIME;
+        }
+    } else if (!val::global("isNaN").call<t_bool>("call", val::object(), val::global("Number").call<val>("call", val::object(), x))) {
+        t = t_dtype::DTYPE_FLOAT64;
+    } else if (jstype == "string" && is_valid_date(moment, candidates, x)) {
+        t = t_dtype::DTYPE_TIME;
+    } else if (jstype == "string") {
+        t_str lower = x.call<val>("toLowerCase").as<t_str>();
+        if (lower == "true" || lower == "false") {
+            t = t_dtype::DTYPE_BOOL;
+        } else {
+            t = t_dtype::DTYPE_STR;
+        }
+    }
+
+    return t;
+}
+
 template <typename T>
 void
 _fill_col(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
@@ -406,7 +458,8 @@ _fill_col(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
         arrow::vecFromTypedArray(data, col->get_nth<T>(0), nrows);
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            val item = accessor.call<val>("get", name, i);
+            val value = accessor.call<val>("get", name, i);
+            val item = accessor.call<val>("marshal", value, infer_type(value, accessor["moment"], accessor["candidates"]));
 
             if (item.isUndefined())
                 continue;
@@ -416,7 +469,7 @@ _fill_col(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
                 continue;
             }
 
-            auto elem = item.as<T>(); //dcol[i].as<T>();
+            auto elem = item.as<T>();
             col->set_nth(i, elem);
         }
     }
@@ -462,7 +515,8 @@ _fill_col<t_time>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
         }
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            val item = accessor.call<val>("get", name, i);
+            val value = accessor.call<val>("get", name, i);
+            val item = accessor.call<val>("marshal", value, infer_type(value, accessor["moment"], accessor["candidates"]));
 
             if (item.isUndefined())
                 continue;
@@ -503,7 +557,8 @@ _fill_col<t_date>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
         // }
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            val item = accessor.call<val>("get", name, i);
+            val value = accessor.call<val>("get", name, i);
+            val item = accessor.call<val>("marshal", value, infer_type(value, accessor["moment"], accessor["candidates"]));
 
             if (item.isUndefined())
                 continue;
@@ -533,7 +588,8 @@ _fill_col<t_bool>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
         }
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            val item = accessor.call<val>("get", name, i);
+            val value = accessor.call<val>("get", name, i);
+            val item = accessor.call<val>("marshal", value, infer_type(value, accessor["moment"], accessor["candidates"]));
 
             if (item.isUndefined())
                 continue;
@@ -596,7 +652,8 @@ _fill_col<std::string>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow
         }
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            val item = accessor.call<val>("get", name, i);
+            val value = accessor.call<val>("get", name, i);
+            val item = accessor.call<val>("marshal", value, infer_type(value, accessor["moment"], accessor["candidates"]));
 
             if (item.isUndefined())
                 continue;
@@ -628,99 +685,64 @@ _fill_col<std::string>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow
 void
 _fill_data(t_table& tbl, t_svec ocolnames, val accessor, std::vector<t_dtype> odt,
     t_uint32 offset, t_bool is_arrow) {
-    std::vector<val> data_cols;
-
-    if (is_arrow) {
-        data_cols = vecFromJSArray<val>(accessor["cdata"]);
-    }
 
     for (auto cidx = 0; cidx < ocolnames.size(); ++cidx) {
         auto name = ocolnames[cidx];
         auto col = tbl.get_column(name);
         auto col_type = odt[cidx];
 
-        // TODO: please refactor
-        if (is_arrow) {
-            auto dcol = data_cols[cidx];
-            
-            switch (col_type) {
-                case DTYPE_INT8: {
-                    _fill_col<t_int8>(dcol, col, name, is_arrow);
-                } break;
-                case DTYPE_INT16: {
-                    _fill_col<t_int16>(dcol, col, name, is_arrow);
-                } break;
-                case DTYPE_INT32: {
-                    _fill_col<t_int32>(dcol, col, name, is_arrow);
-                } break;
-                case DTYPE_INT64: {
-                    _fill_col<t_int64>(dcol, col, name, is_arrow);
-                } break;
-                case DTYPE_BOOL: {
-                    _fill_col<t_bool>(dcol, col, name, is_arrow);
-                } break;
-                case DTYPE_FLOAT32: {
-                    _fill_col<t_float32>(dcol, col, name, is_arrow);
-                } break;
-                case DTYPE_FLOAT64: {
-                    _fill_col<t_float64>(dcol, col, name, is_arrow);
-                } break;
-                case DTYPE_DATE: {
-                    _fill_col<t_date>(dcol, col, name, is_arrow);
-                } break;
-                case DTYPE_TIME: {
-                    _fill_col<t_time>(dcol, col, name, is_arrow);
-                } break;
-                case DTYPE_STR: {
-                    _fill_col<std::string>(dcol, col, name, is_arrow);
-                } break;
-                default:
-                    break;
-            }
+        val dcol = val::undefined();
 
-             // Fill validity bitmap
+        if (is_arrow) {
+            dcol = accessor["cdata"][cidx];
+        } else {
+            dcol = accessor;
+        }
+
+        switch (col_type) {
+            case DTYPE_INT8: {
+                _fill_col<t_int8>(dcol, col, name, is_arrow);
+            } break;
+            case DTYPE_INT16: {
+                _fill_col<t_int16>(dcol, col, name, is_arrow);
+            } break;
+            case DTYPE_INT32: {
+                _fill_col<t_int32>(dcol, col, name, is_arrow);
+            } break;
+            case DTYPE_INT64: {
+                _fill_col<t_int64>(dcol, col, name, is_arrow);
+            } break;
+            case DTYPE_BOOL: {
+                _fill_col<t_bool>(dcol, col, name, is_arrow);
+            } break;
+            case DTYPE_FLOAT32: {
+                _fill_col<t_float32>(dcol, col, name, is_arrow);
+            } break;
+            case DTYPE_FLOAT64: {
+                _fill_col<t_float64>(dcol, col, name, is_arrow);
+            } break;
+            case DTYPE_DATE: {
+                _fill_col<t_date>(dcol, col, name, is_arrow);
+            } break;
+            case DTYPE_TIME: {
+                _fill_col<t_time>(dcol, col, name, is_arrow);
+            } break;
+            case DTYPE_STR: {
+                _fill_col<std::string>(dcol, col, name, is_arrow);
+            } break;
+            default:
+                break;
+        }
+
+        if (is_arrow) {
+            // Fill validity bitmap
             t_uint32 null_count = dcol["nullCount"].as<t_uint32>();
 
             if (null_count == 0) {
                 col->valid_raw_fill();
             } else {
                 val validity = dcol["nullBitmap"];
-                arrow::fill_col_valid(validity, col);
-            }
-        } else {
-            switch (col_type) {
-                case DTYPE_INT8: {
-                    _fill_col<t_int8>(accessor, col, name, is_arrow);
-                } break;
-                case DTYPE_INT16: {
-                    _fill_col<t_int16>(accessor, col, name, is_arrow);
-                } break;
-                case DTYPE_INT32: {
-                    _fill_col<t_int32>(accessor, col, name, is_arrow);
-                } break;
-                case DTYPE_INT64: {
-                    _fill_col<t_int64>(accessor, col, name, is_arrow);
-                } break;
-                case DTYPE_BOOL: {
-                    _fill_col<t_bool>(accessor, col, name, is_arrow);
-                } break;
-                case DTYPE_FLOAT32: {
-                    _fill_col<t_float32>(accessor, col, name, is_arrow);
-                } break;
-                case DTYPE_FLOAT64: {
-                    _fill_col<t_float64>(accessor, col, name, is_arrow);
-                } break;
-                case DTYPE_DATE: {
-                    _fill_col<t_date>(accessor, col, name, is_arrow);
-                } break;
-                case DTYPE_TIME: {
-                    _fill_col<t_time>(accessor, col, name, is_arrow);
-                } break;
-                case DTYPE_STR: {
-                    _fill_col<std::string>(accessor, col, name, is_arrow);
-                } break;
-                default:
-                    break;
+                arrow::fill_col_valid(validity, col);     
             }
         }
     }
@@ -919,13 +941,6 @@ table_add_computed_column(t_table& table, val computed_defs) {
  * parses and converts input data into a canonical format for
  * interfacing with Perspective.
  */
-t_bool
-is_valid_date(val moment, val candidates, val x) {
-    return moment
-        .call<val>("call", val::object(), x, candidates, val(true))
-        .call<val>("isValid")
-        .as<t_bool>();
-}
 
 // Name parsing
 val
@@ -956,53 +971,6 @@ column_names(val data, t_int32 format) {
     } 
 
     return column_names;
-}
-
-// Type inferrence
-t_dtype
-infer_type(val x, val moment, val candidates) {
-    t_str jstype = x.typeOf().as<t_str>();
-    t_dtype t = t_dtype::DTYPE_STR;
-
-    if (x.isNull()) {
-        t = t_dtype::DTYPE_NONE;
-    } else if (jstype == "number") {
-        t_float64 x_float64 = x.as<t_float64>();
-        if ((std::fmod(x_float64, 1.0) == 0.0) && (x_float64 < 10000.0) && (x_float64 != 0.0)) {
-            t = t_dtype::DTYPE_INT32;
-        } else {
-            t = t_dtype::DTYPE_FLOAT64;
-        }
-    } else if (jstype == "boolean") {
-        t = t_dtype::DTYPE_BOOL;
-    } else if (x.instanceof(val::global("Date"))) {
-        t_int32 hours = x.call<val>("getHours").as<t_int32>();
-        t_int32 minutes = x.call<val>("getMinutes").as<t_int32>();
-        t_int32 seconds = x.call<val>("getSeconds").as<t_int32>();
-        t_int32 milliseconds = x.call<val>("getMilliseconds").as<t_int32>();
-
-        if (hours == 0 && minutes == 0 && seconds == 0 && milliseconds == 0) {
-            t = t_dtype::DTYPE_DATE;
-        } else {
-            t = t_dtype::DTYPE_TIME;
-        }
-    } else if (jstype == "string") {
-        if (is_valid_date(moment, candidates, x)) {
-            t = t_dtype::DTYPE_TIME;
-        } else {
-            t_str lower = x.call<val>("toLowerCase").as<t_str>();
-            if (lower == "true" || lower == "false") {
-                t = t_dtype::DTYPE_BOOL;
-            } else {
-                t = t_dtype::DTYPE_STR;
-            }
-        }
-    } else if (!val::global("isNaN").call<t_bool>("call", val::object(), val::global("Number").call<val>("call", val::object(), x))) {
-        PSP_COMPLAIN_AND_ABORT("BADLANDS");
-        t = t_dtype::DTYPE_FLOAT64;
-    } 
-
-    return t;
 }
 
 t_dtype
@@ -1149,19 +1117,20 @@ make_table(t_pool* pool, val gnode, val accessor, val computed, t_uint32 offset,
     t_str index, t_bool is_delete, t_bool is_arrow) {
     t_uint32 size = accessor["row_count"].as<t_int32>();
 
-    //val data = accessor["data"];
-    //t_int32 format = accessor["format"].as<t_int32>();
-
-    val names = val::undefined();
-    val types = val::undefined();
+    // names and types can be preset by update/delete
+    val names = accessor["column_names"];
+    val types = accessor["data_types"];
 
     // Create the input and port schemas
     if (is_arrow) {
         names = accessor["names"];
         types = accessor["types"];
-    } else {
-        names = accessor["column_names"];
-        types = accessor["data_types"];
+    } else if (names.isUndefined() && types.isUndefined()) {
+        val data = accessor["data"];
+        t_int32 format = accessor["format"].as<t_int32>();
+
+        names = column_names(data, format);
+        types = data_types(data, format, names, accessor["moment"], accessor["candidates"]);
     }
 
     t_svec colnames = vecFromJSArray<std::string>(names);

@@ -20,9 +20,10 @@ export class DataAccessor {
         };
         this.format = undefined;
         this.data = undefined;
+        this.column_names = undefined;
+        this.data_types = undefined;
         this.row_count = 0;
-        this.column_names = [];
-        this.data_types = [];
+        // TODO: optimize and refactor out
         this.moment = moment;
         this.candidates = DATE_PARSE_CANDIDATES;
     }
@@ -75,13 +76,11 @@ export class DataAccessor {
             throw "Unknown data format!";
         }
 
-        return this.normalize_value(value, column_name);
+        return value;
     }
 
-    normalize_value(value, name) {
+    marshal(value, type) {
         let val = clean_data(value);
-        // TODO: optimize out the call to this.data_types
-        let type = this.data_types[this.column_names.indexOf(name)].value;
         const date_parser = new DateParser();
 
         if (val === null) {
@@ -92,13 +91,14 @@ export class DataAccessor {
             return undefined;
         }
 
-        switch (get_column_type(type)) {
+        switch (get_column_type(type.value)) {
             case "float": {
                 val = Number(val);
                 break;
             }
             case "integer": {
                 val = Number(val);
+                // FIXME: bring this back in
                 if (val > 2147483647 || val < -2147483648) {
                     // This handles cases where a long sequence of e.g. 0 precedes a clearly
                     // float value in an inferred column.  Would not be needed if the type inference
@@ -140,7 +140,7 @@ export class DataAccessor {
             for (let name of this.column_names) {
                 let col = [];
                 for (let d of data) {
-                    col.push(this.normalize_value(d[name], name));
+                    col.push(this.marshal(d[name], this.data_types[Object.keys(this.column_names).indexOf(name)].value));
                 }
 
                 cdata.push(col);
@@ -172,10 +172,8 @@ export class DataAccessor {
         this.data = data;
         this.format = this.is_format(data);
         this.row_count = this.get_row_count(data);
-        // TODO: optimize and remove double calculations
-        this.column_names = __MODULE__.column_names(data, this.format);
-        this.data_types = __MODULE__.data_types(data, this.format, this.column_names, moment, DATE_PARSE_CANDIDATES);
     }
+
     /**
      * Converts supported inputs into canonical data for
      * interfacing with perspective.
