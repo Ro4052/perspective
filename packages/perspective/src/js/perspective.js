@@ -68,7 +68,6 @@ export default function(Module) {
      * @returns
      */
     function make_table(accessor, pool, gnode, computed, index, limit, limit_index, is_delete, is_arrow) {
-        // TODO: refactor
         if (is_arrow) {
             for (let chunk of accessor) {
                 gnode = __MODULE__.make_table(pool, gnode, chunk, computed, limit_index, limit || 4294967295, index, is_delete, is_arrow);
@@ -78,10 +77,7 @@ export default function(Module) {
             gnode = __MODULE__.make_table(pool, gnode, accessor, computed, limit_index, limit || 4294967295, index, is_delete, is_arrow);
             limit_index = calc_limit_index(limit_index, accessor.row_count, limit);
         }
-        /* for (let chunk of pdata) {
-            gnode = __MODULE__.make_table(pool, gnode, chunk, computed, limit_index, limit || 4294967295, index, is_delete);
-            limit_index = calc_limit_index(limit_index, chunk.cdata[0].length, limit);
-        } */
+
         return [gnode, limit_index];
     }
 
@@ -1110,6 +1106,10 @@ export default function(Module) {
         let types = schema.types();
         let is_arrow = false;
 
+        // attach preset names & types
+        accessor.column_names = cols;
+        accessor.data_types = accessor.extract_typevec(types);
+
         if (data instanceof ArrayBuffer) {
             if (this.size() === 0) {
                 throw new Error("Overriding Arrow Schema is not supported.");
@@ -1121,13 +1121,9 @@ export default function(Module) {
                 data = "_" + data;
             }
             accessor.init(__MODULE__, papaparse.parse(data.trim(), {dynamicTyping: true, header: true}).data);
-            accessor.column_names = cols;
-            accessor.data_types = accessor.extract_typevec(types);
             pdata = accessor;
         } else {
             accessor.init(__MODULE__, data);
-            accessor.column_names = cols;
-            accessor.data_types = accessor.extract_typevec(types);
             pdata = accessor;
         }
 
@@ -1139,6 +1135,8 @@ export default function(Module) {
                 }
             }
         } */
+
+        console.log(pdata);
 
         try {
             [, this.limit_index] = make_table(pdata, this.pool, this.gnode, this.computed, this.index || "", this.limit, this.limit_index, false, is_arrow);
@@ -1168,16 +1166,18 @@ export default function(Module) {
 
         data = data.map(idx => ({[this.index]: idx}));
 
+        accessor.column_names = [this.index];
+        accessor.data_types = accessor.extract_typevec(types);
+
         if (data instanceof ArrayBuffer) {
             pdata = load_arrow_buffer(data, [this.index], types);
             is_arrow = true;
         } else {
             accessor.init(__MODULE__, data);
-            accessor.column_names = [this.index];
-            accessor.data_types = accessor.extract_typevec(types);
             pdata = accessor;
         }
 
+        console.log(pdata);
         try {
             [, this.limit_index] = make_table(pdata, this.pool, this.gnode, undefined, this.index || "", this.limit, this.limit_index, true, is_arrow);
             this.initialized = true;
@@ -1558,13 +1558,11 @@ export default function(Module) {
             options = options || {};
             options.index = options.index || "";
 
-            let names; // TODO: refactor
-            let pdata;
+            let data_accessor;
             let is_arrow = false;
 
             if (data instanceof ArrayBuffer || (Buffer && data instanceof Buffer)) {
-                pdata = load_arrow_buffer(data);
-                names = pdata[0].names;
+                data_accessor = load_arrow_buffer(data);
                 is_arrow = true;
             } else {
                 if (typeof data === "string") {
@@ -1574,9 +1572,8 @@ export default function(Module) {
                     data = papaparse.parse(data.trim(), {dynamicTyping: true, header: true}).data;
                 }
 
-                //pdata = parser.parse(__MODULE__, data);
                 accessor.init(__MODULE__, data);
-                names = accessor.column_names;
+                data_accessor = accessor;
 
                 // FIXME: reimplement properly
                 /* if (pdata.row_count > CHUNKED_THRESHOLD) {
@@ -1595,10 +1592,6 @@ export default function(Module) {
                 throw `Cannot specify both index '${options.index}' and limit '${options.limit}'.`;
             }
 
-            if (options.index && names.indexOf(options.index) === -1) {
-                throw `Specified index '${options.index}' does not exist in data.`;
-            }
-
             let gnode,
                 pool,
                 limit_index = 0;
@@ -1606,12 +1599,7 @@ export default function(Module) {
             try {
                 pool = new __MODULE__.t_pool();
 
-                // TODO: refactor
-                if (is_arrow) {
-                    [gnode, limit_index] = make_table(pdata, pool, gnode, undefined, options.index, options.limit, limit_index, false, is_arrow);
-                } else {
-                    [gnode, limit_index] = make_table(accessor, pool, gnode, undefined, options.index, options.limit, limit_index, false, is_arrow);
-                }
+                [gnode, limit_index] = make_table(data_accessor, pool, gnode, undefined, options.index, options.limit, limit_index, false, is_arrow);
 
                 return new table(gnode, pool, options.index, undefined, options.limit, limit_index);
             } catch (e) {

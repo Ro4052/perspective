@@ -407,7 +407,7 @@ is_valid_date(val moment, val candidates, val x) {
 t_dtype
 infer_type(val x, val moment, val candidates) {
     t_str jstype = x.typeOf().as<t_str>();
-    t_dtype t = t_dtype::DTYPE_FLOAT64;
+    t_dtype t = t_dtype::DTYPE_STR;
 
     if (x.isNull()) {
         t = t_dtype::DTYPE_NONE;
@@ -431,25 +431,28 @@ infer_type(val x, val moment, val candidates) {
         } else {
             t = t_dtype::DTYPE_TIME;
         }
-    } else if (!val::global("isNaN").call<t_bool>("call", val::object(), val::global("Number").call<val>("call", val::object(), x))) {
-        t = t_dtype::DTYPE_FLOAT64;
-    } else if (jstype == "string" && is_valid_date(moment, candidates, x)) {
-        t = t_dtype::DTYPE_TIME;
     } else if (jstype == "string") {
-        t_str lower = x.call<val>("toLowerCase").as<t_str>();
-        if (lower == "true" || lower == "false") {
-            t = t_dtype::DTYPE_BOOL;
+        if (is_valid_date(moment, candidates, x)) {
+            t = t_dtype::DTYPE_TIME;
         } else {
-            t = t_dtype::DTYPE_STR;
+            t_str lower = x.call<val>("toLowerCase").as<t_str>();
+            if (lower == "true" || lower == "false") {
+                t = t_dtype::DTYPE_BOOL;
+            } else {
+                t = t_dtype::DTYPE_STR;
+            }
         }
-    }
+    } else if (!val::global("isNaN").call<t_bool>("call", val::object(), val::global("Number").call<val>("call", val::object(), x))) {
+        PSP_COMPLAIN_AND_ABORT("BADLANDS");
+        t = t_dtype::DTYPE_FLOAT64;
+    } 
 
     return t;
 }
 
 template <typename T>
 void
-_fill_col(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
+_fill_col(val accessor, t_col_sptr col, t_str name, t_dtype type, t_bool is_arrow) {
     // iterates through dcol, sets them on the c++ column
     t_uindex nrows = col->size();
 
@@ -458,9 +461,8 @@ _fill_col(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
         arrow::vecFromTypedArray(data, col->get_nth<T>(0), nrows);
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            val value = accessor.call<val>("get", name, i);
-            val item = accessor.call<val>("marshal", value, infer_type(value, accessor["moment"], accessor["candidates"]));
-
+            val item = accessor.call<val>("marshal", name, i, type);
+            
             if (item.isUndefined())
                 continue;
 
@@ -477,7 +479,7 @@ _fill_col(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
 
 template <>
 void
-_fill_col<t_int64>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
+_fill_col<t_int64>(val accessor, t_col_sptr col, t_str name, t_dtype type, t_bool is_arrow) {
     t_uindex nrows = col->size();
 
     if (is_arrow) {
@@ -492,7 +494,7 @@ _fill_col<t_int64>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
 
 template <>
 void
-_fill_col<t_time>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
+_fill_col<t_time>(val accessor, t_col_sptr col, t_str name, t_dtype type, t_bool is_arrow) {
     t_uindex nrows = col->size();
 
     if (is_arrow) {
@@ -515,8 +517,7 @@ _fill_col<t_time>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
         }
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            val value = accessor.call<val>("get", name, i);
-            val item = accessor.call<val>("marshal", value, infer_type(value, accessor["moment"], accessor["candidates"]));
+            val item = accessor.call<val>("marshal", name, i, type);
 
             if (item.isUndefined())
                 continue;
@@ -534,7 +535,7 @@ _fill_col<t_time>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
 
 template <>
 void
-_fill_col<t_date>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
+_fill_col<t_date>(val accessor, t_col_sptr col, t_str name, t_dtype type, t_bool is_arrow) {
     t_uindex nrows = col->size();
 
     if (is_arrow) {
@@ -557,8 +558,7 @@ _fill_col<t_date>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
         // }
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            val value = accessor.call<val>("get", name, i);
-            val item = accessor.call<val>("marshal", value, infer_type(value, accessor["moment"], accessor["candidates"]));
+            val item = accessor.call<val>("marshal", name, i, type);
 
             if (item.isUndefined())
                 continue;
@@ -575,7 +575,7 @@ _fill_col<t_date>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
 
 template <>
 void
-_fill_col<t_bool>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
+_fill_col<t_bool>(val accessor, t_col_sptr col, t_str name, t_dtype type, t_bool is_arrow) {
     t_uindex nrows = col->size();
 
     if (is_arrow) {
@@ -588,8 +588,7 @@ _fill_col<t_bool>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
         }
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            val value = accessor.call<val>("get", name, i);
-            val item = accessor.call<val>("marshal", value, infer_type(value, accessor["moment"], accessor["candidates"]));
+            val item = accessor.call<val>("marshal", name, i, type);
 
             if (item.isUndefined())
                 continue;
@@ -607,7 +606,7 @@ _fill_col<t_bool>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
 
 template <>
 void
-_fill_col<std::string>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow) {
+_fill_col<std::string>(val accessor, t_col_sptr col, t_str name, t_dtype type, t_bool is_arrow) {
 
     t_uindex nrows = col->size();
 
@@ -652,8 +651,7 @@ _fill_col<std::string>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow
         }
     } else {
         for (auto i = 0; i < nrows; ++i) {
-            val value = accessor.call<val>("get", name, i);
-            val item = accessor.call<val>("marshal", value, infer_type(value, accessor["moment"], accessor["candidates"]));
+            val item = accessor.call<val>("marshal", name, i, type);
 
             if (item.isUndefined())
                 continue;
@@ -672,11 +670,16 @@ _fill_col<std::string>(val accessor, t_col_sptr col, t_str name, t_bool is_arrow
 }
 
 /**
- *
+ * Fills the table with data from Javascript.
  *
  * Params
  * ------
- *
+ * tbl - pointer to the table object
+ * ocolnames - vector of column names
+ * accessor - the JS data accessor interface
+ * odt - vector of data types
+ * offset 
+ * is_arrow - flag for arrow data
  *
  * Returns
  * -------
@@ -701,34 +704,34 @@ _fill_data(t_table& tbl, t_svec ocolnames, val accessor, std::vector<t_dtype> od
 
         switch (col_type) {
             case DTYPE_INT8: {
-                _fill_col<t_int8>(dcol, col, name, is_arrow);
+                _fill_col<t_int8>(dcol, col, name, col_type, is_arrow);
             } break;
             case DTYPE_INT16: {
-                _fill_col<t_int16>(dcol, col, name, is_arrow);
+                _fill_col<t_int16>(dcol, col, name, col_type, is_arrow);
             } break;
             case DTYPE_INT32: {
-                _fill_col<t_int32>(dcol, col, name, is_arrow);
+                _fill_col<t_int32>(dcol, col, name, col_type, is_arrow);
             } break;
             case DTYPE_INT64: {
-                _fill_col<t_int64>(dcol, col, name, is_arrow);
+                _fill_col<t_int64>(dcol, col, name, col_type, is_arrow);
             } break;
             case DTYPE_BOOL: {
-                _fill_col<t_bool>(dcol, col, name, is_arrow);
+                _fill_col<t_bool>(dcol, col, name, col_type, is_arrow);
             } break;
             case DTYPE_FLOAT32: {
-                _fill_col<t_float32>(dcol, col, name, is_arrow);
+                _fill_col<t_float32>(dcol, col, name, col_type, is_arrow);
             } break;
             case DTYPE_FLOAT64: {
-                _fill_col<t_float64>(dcol, col, name, is_arrow);
+                _fill_col<t_float64>(dcol, col, name, col_type, is_arrow);
             } break;
             case DTYPE_DATE: {
-                _fill_col<t_date>(dcol, col, name, is_arrow);
+                _fill_col<t_date>(dcol, col, name, col_type, is_arrow);
             } break;
             case DTYPE_TIME: {
-                _fill_col<t_time>(dcol, col, name, is_arrow);
+                _fill_col<t_time>(dcol, col, name, col_type, is_arrow);
             } break;
             case DTYPE_STR: {
-                _fill_col<std::string>(dcol, col, name, is_arrow);
+                _fill_col<std::string>(dcol, col, name, col_type, is_arrow);
             } break;
             default:
                 break;
@@ -1121,7 +1124,6 @@ make_table(t_pool* pool, val gnode, val accessor, val computed, t_uint32 offset,
     val names = accessor["column_names"];
     val types = accessor["data_types"];
 
-    // Create the input and port schemas
     if (is_arrow) {
         names = accessor["names"];
         types = accessor["types"];
@@ -1133,6 +1135,12 @@ make_table(t_pool* pool, val gnode, val accessor, val computed, t_uint32 offset,
         types = data_types(data, format, names, accessor["moment"], accessor["candidates"]);
     }
 
+    // check if index is valid after getting column names
+    if (index != "" && names.call<val>("includes", index).as<t_bool>() == false) {
+        PSP_COMPLAIN_AND_ABORT("Specified index '" + index + "' does not exist in data.")
+    }
+
+    // Create the input and port schemas
     t_svec colnames = vecFromJSArray<std::string>(names);
     t_dtypevec dtypes = vecFromJSArray<t_dtype>(types);
 
